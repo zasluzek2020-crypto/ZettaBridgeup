@@ -29,6 +29,16 @@ static uint32_t host_call(uint32_t index, uint32_t arg) {
     return r0;
 }
 
+/* Temporary compatibility diagnostics. These SVCs deliberately use otherwise-unused runtime
+ * host-call slots. The host records them as unimplemented calls and returns zero, so they are
+ * side-effect-free while telling us exactly how far zbhost gets on a device. */
+static void startup_stage_10(void) { __asm__ volatile("svc #0x5afe10" : : : "memory"); }
+static void startup_stage_11(void) { __asm__ volatile("svc #0x5afe11" : : : "memory"); }
+static void startup_stage_12(void) { __asm__ volatile("svc #0x5afe12" : : : "memory"); }
+static void startup_stage_13(void) { __asm__ volatile("svc #0x5afe13" : : : "memory"); }
+static void startup_stage_14(void) { __asm__ volatile("svc #0x5afe14" : : : "memory"); }
+static void startup_stage_15(void) { __asm__ volatile("svc #0x5afe15" : : : "memory"); }
+
 static uint32_t service_dlopen(const char* path, uint32_t flags) {
     return (uint32_t)(uintptr_t)dlopen(path, (int)flags);
 }
@@ -71,15 +81,20 @@ static int preload(const char* path) {
 }
 
 int main(int argc, char** argv) {
+    startup_stage_10();
     if (argc != 2 && argc != 3) return ZB_HOST_EXIT_USAGE;
     void* dl_android = dlopen("libdl_android.so", RTLD_NOW);
+    startup_stage_11();
     void (*set_target_sdk)(unsigned) = dl_android != NULL
         ? (void (*)(unsigned))dlsym(dl_android, "android_set_application_target_sdk_version")
         : NULL;
     if (set_target_sdk == NULL) return ZB_HOST_EXIT_TARGET_SDK;
     set_target_sdk((unsigned)strtoul(argv[1], NULL, 10));
+    startup_stage_12();
     if (!preload("libzbcompat.so")) return ZB_HOST_EXIT_PRELOAD;
+    startup_stage_13();
     if (argc == 3 && !preload(argv[2])) return ZB_HOST_EXIT_PRELOAD;
+    startup_stage_14();
     const struct zb_service_api api = {
         sizeof(api), ZB_SERVICE_PROTOCOL_VERSION,
         (uint32_t)(uintptr_t)service_dlopen,
@@ -90,6 +105,7 @@ int main(int argc, char** argv) {
         (uint32_t)(uintptr_t)service_free,
         (uint32_t)(uintptr_t)scratch, sizeof(scratch),
     };
+    startup_stage_15();
     uint32_t status;
     do {
         status = host_call(ZB_SERVICE_READY_INDEX, (uint32_t)(uintptr_t)&api);
