@@ -1,0 +1,108 @@
+name: Android Compatibility Build
+
+on:
+  push:
+    branches:
+      - android-compat-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    env:
+      NDK_VERSION: 29.0.14206865
+      NDK_HOST: linux-x86_64
+
+    steps:
+      - name: Checkout source and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang cmake ninja-build libboost-dev \
+            e2fsprogs unzip curl python3 patch pkg-config
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;${NDK_VERSION}"
+          echo "NDK=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          test -x "$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+
+      - name: Extract ARM32 Android sysroot
+        run: |
+          ./tools/extract_sysroot.sh
+          test -f sysroot/system/bin/linker
+          test -f sysroot/system/lib/libc.so
+          rm -rf .cache/gsi
+
+      - name: Build ARM64 translation runtime
+        shell: bash
+        run: |
+          mkdir -p build/boost-headers
+          ln -sfn /usr/include/boost build/boost-headers/boost
+          cmake -S . -B build/android-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DZB_BUILD_TESTS=OFF \
+            -DBoost_INCLUDE_DIR="$GITHUB_WORKSPACE/build/boost-headers"
+          ninja -C build/android-arm64 zbridge zbproxy
+          test -f build/android-arm64/core/libzbridge.so
+          test -f build/android-arm64/core/libzbproxy.so
+
+      - name: Build ARM32 guest runtime
+        shell: bash
+        run: |
+          NDK="$NDK" NDK_HOST="$NDK_HOST" ./tools/build_guest.sh
+          test -f build/guest/zbhost
+          test -f build/guest/lib/libzbjni.so
+
+      - name: Assemble launcher runtime bundle
+        run: |
+          ./tools/make_launcher_bundle.sh
+          ./tools/check_launcher_bundle.py build/launcher
+
+      - name: Build installable debug APK
+        working-directory: android/launcher
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+          test -f app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Collect build information
+        shell: bash
+        run: |
+          mkdir -p build/artifact
+          cp android/launcher/app/build/outputs/apk/debug/app-debug.apk \
+            build/artifact/legacy-compat-debug.apk
+          sha256sum build/artifact/legacy-compat-debug.apk | tee build/artifact/SHA256.txt
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-compat-debug-apk
+          path: build/artifact/
+          if-no-files-found: error
+          retention-days: 7
