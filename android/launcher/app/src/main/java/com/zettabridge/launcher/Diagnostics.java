@@ -23,10 +23,12 @@ import java.util.Locale;
  *
  * <p>The translator's own runtime report lands next to it as zb-runtime-report.txt, rewritten by
  * the :guest process whenever it changes, so it survives a :guest process that dies silently.
+ * A lightweight Java startup trace is kept separately and appended when the report is displayed.
  */
 final class Diagnostics {
     private static final String TAG = "zb-launcher";
     private static final String REPORT_NAME = "zb-runtime-report.txt";
+    private static final String TRACE_NAME = "zb-java-trace.txt";
 
     private Diagnostics() {}
 
@@ -36,11 +38,18 @@ final class Diagnostics {
         return dir == null ? null : new File(dir, REPORT_NAME);
     }
 
+    private static File javaTraceFile(Context context) {
+        File dir = context.getExternalFilesDir(null);
+        return dir == null ? null : new File(dir, TRACE_NAME);
+    }
+
     /**
      * Makes the :guest process persist its runtime report. Called once, before plugin code runs;
      * failures are not fatal, the run simply leaves no report behind.
      */
     static void startRuntimeReport(Context context) {
+        resetJavaTrace(context);
+        trace(context, "guest-process-start");
         File file = runtimeReportFile(context);
         if (file == null) {
             Log.w(TAG, "no external files dir: the runtime report is not persisted");
@@ -52,15 +61,43 @@ final class Diagnostics {
             }
         } catch (Throwable t) {
             Log.w(TAG, "cannot start the runtime report: " + t);
+            trace(context, "runtime-report-start-failed: " + t.getClass().getName() + ": " + safeMessage(t));
         }
     }
 
-    /** The last run report, or null when no run has written one. */
+    /** Adds a short ordered Java-side startup checkpoint for the current :guest process. */
+    static synchronized void trace(Context context, String stage) {
+        File file = javaTraceFile(context);
+        if (file == null) return;
+        String stamp = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date());
+        try (FileOutputStream out = new FileOutputStream(file, true)) {
+            out.write((stamp + " " + stage.replace('\n', ' ') + "\n").getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            Log.w(TAG, "cannot write Java trace: " + e);
+        }
+    }
+
+    private static synchronized void resetJavaTrace(Context context) {
+        File file = javaTraceFile(context);
+        if (file == null) return;
+        try (FileOutputStream ignored = new FileOutputStream(file, false)) {
+            // Truncate at the beginning of every fresh :guest process.
+        } catch (Exception e) {
+            Log.w(TAG, "cannot reset Java trace: " + e);
+        }
+    }
+
+    /** The last run report, plus Java-side startup checkpoints. */
     static String readRuntimeReport(Context context) {
         File file = runtimeReportFile(context);
         if (file == null || !file.isFile()) return null;
         try {
             String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            File trace = javaTraceFile(context);
+            if (trace != null && trace.isFile()) {
+                String java = new String(Files.readAllBytes(trace.toPath()), StandardCharsets.UTF_8);
+                if (!java.isEmpty()) text += "\njava-startup-trace:\n" + java;
+            }
             return text.isEmpty() ? null : text;
         } catch (IOException | RuntimeException e) {
             Log.w(TAG, "cannot read the runtime report: " + e);
@@ -86,6 +123,7 @@ final class Diagnostics {
         String stamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
         String text = stamp + " " + what + "\n" + Log.getStackTraceString(t);
         Log.e(TAG, what, t);
+        trace(context, "ERROR " + what + ": " + t.getClass().getName() + ": " + safeMessage(t));
         appendToFile(context, text);
         if (copy) copy(context, "ZettaBridge error", text);
         return text;
@@ -97,6 +135,7 @@ final class Diagnostics {
         final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((thread, t) -> {
             try {
+                trace(app, "UNCAUGHT " + thread.getName() + ": " + t.getClass().getName() + ": " + safeMessage(t));
                 appendToFile(app, new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date())
                         + " uncaught in thread " + thread.getName() + "\n" + Log.getStackTraceString(t));
             } catch (Throwable ignored) {
@@ -104,6 +143,11 @@ final class Diagnostics {
             }
             if (previous != null) previous.uncaughtException(thread, t);
         });
+    }
+
+    private static String safeMessage(Throwable t) {
+        String message = t.getMessage();
+        return message != null ? message : "(no message)";
     }
 
     private static void appendToFile(Context context, String text) {
