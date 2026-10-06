@@ -59,13 +59,16 @@ final class LoadedPlugin {
 
     /** onParsed runs before the plugin Application is created (the runtime marks it current). */
     static LoadedPlugin load(Application host, PluginRecord record, Consumer<LoadedPlugin> onParsed) throws Exception {
+        Diagnostics.trace(host, "plugin-load-begin " + record.packageName);
         PackageManager pm = host.getPackageManager();
         PackageInfo info = pm.getPackageArchiveInfo(record.apk().getPath(), PluginStore.ARCHIVE_FLAGS);
         if (info == null) throw new IllegalStateException("cannot parse " + record.apk());
+        Diagnostics.trace(host, "archive-parsed");
         ApplicationInfo ai = PluginStore.applicationInfo(info, record);
         ai.uid = android.os.Process.myUid();
         // Public API; works for an APK that is not installed once sourceDir points at it.
         Resources res = pm.getResourcesForApplication(ai);
+        Diagnostics.trace(host, "resources-ready");
 
         File codeCache = new File(host.getCodeCacheDir(), "plugins/" + record.packageName);
         if (!codeCache.isDirectory() && !codeCache.mkdirs()) {
@@ -79,6 +82,7 @@ final class LoadedPlugin {
         // stable com.zettabridge.core bridge is explicitly delegated to the launcher loader.
         ClassLoader cl = new PluginClassLoader(record, codeCache, RuntimeBundle.proxyLibrary(host),
                 android.content.Context.class.getClassLoader(), ZBridge.class.getClassLoader());
+        Diagnostics.trace(host, "classloader-ready");
 
         LoadedPlugin p = new LoadedPlugin(record, ai, res, cl);
         p.info = info;
@@ -89,7 +93,9 @@ final class LoadedPlugin {
             // Same rule: the GL instrumentation is read once, when the guest JNI runtime is built.
             ZBridge.setGlDiagnostics(record.diagnostics);
             // Must precede every plugin class initialization, provider and Application callback.
+            Diagnostics.trace(host, "activate-plugin-enter");
             ZBridge.activatePlugin(record.dir.getCanonicalPath(), record.targetSdk, cl);
+            Diagnostics.trace(host, "activate-plugin-return");
         }
         if (info.activities != null) {
             for (ActivityInfo a : info.activities) {
@@ -117,17 +123,27 @@ final class LoadedPlugin {
         }
 
         onParsed.accept(p);
+        Diagnostics.trace(host, "plugin-marked-current");
 
         // Same order as ActivityThread.handleBindApplication: attach, content providers, onCreate.
         // p.application is set before attach, so getApplicationContext() already returns the
         // plugin Application inside attachBaseContext (apps commonly cache it there).
         String appClass = ai.className != null ? ai.className : Application.class.getName();
+        Diagnostics.trace(host, "application-class " + appClass);
         PluginContext appContext = new PluginContext(host.getBaseContext(), p);
+        Diagnostics.trace(host, "application-new-enter");
         p.application = (Application) cl.loadClass(appClass).getDeclaredConstructor().newInstance();
+        Diagnostics.trace(host, "application-new-return");
+        Diagnostics.trace(host, "application-attach-enter");
         Reflect.method(Application.class, "attach", Context.class).invoke(p.application, appContext);
+        Diagnostics.trace(host, "application-attach-return");
         Log.i(TAG, "plugin " + p.packageName + ": application " + appClass + " attached");
+        Diagnostics.trace(host, "providers-enter count=" + (info.providers != null ? info.providers.length : 0));
         installProviders(p, info, ai);
+        Diagnostics.trace(host, "providers-return");
+        Diagnostics.trace(host, "application-onCreate-enter");
         p.application.onCreate();
+        Diagnostics.trace(host, "application-onCreate-return");
         return p;
     }
 
@@ -140,11 +156,13 @@ final class LoadedPlugin {
         if (info.providers == null) return;
         for (ProviderInfo pi : info.providers) {
             try {
+                Diagnostics.trace(p.application, "provider-enter " + pi.name);
                 pi.applicationInfo = ai;
                 ContentProvider provider = (ContentProvider) p.classLoader.loadClass(pi.name)
                         .getDeclaredConstructor().newInstance();
                 provider.attachInfo(p.application, pi);
                 p.providers.add(provider);
+                Diagnostics.trace(p.application, "provider-return " + pi.name);
                 Log.i(TAG, "plugin " + p.packageName + ": provider " + pi.name + " started");
             } catch (Throwable t) {
                 Diagnostics.report(p.application, "plugin " + p.packageName + ": provider " + pi.name + " failed", t,
