@@ -25,7 +25,10 @@ android {
     defaultConfig {
         applicationId = "com.zettabridge.launcher"
         minSdk = 26
-        targetSdk = 35
+        // Compatibility launcher: keep pre-Android-12 target behavior so imported legacy apps
+        // and their bundled libraries (for example older WorkManager) do not inherit S+ behavior
+        // changes such as mandatory PendingIntent mutability flags. compileSdk stays modern.
+        targetSdk = 30
         versionCode = 1
         versionName = "0.1.0"
         ndk { abiFilters += "arm64-v8a" }
