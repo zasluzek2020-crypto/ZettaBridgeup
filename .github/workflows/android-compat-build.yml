@@ -56,6 +56,27 @@ jobs:
           test -f sysroot/system/lib/libc.so
           rm -rf .cache/gsi
 
+      - name: Diagnose guest linker instruction window
+        shell: bash
+        run: |
+          OBJDUMP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          echo "=== guest linker ELF identity ==="
+          file sysroot/system/bin/linker
+          "$READELF" -h sysroot/system/bin/linker
+          echo "=== guest linker section map ==="
+          "$OBJDUMP" -h sysroot/system/bin/linker
+          echo "=== disassembly around vaddr 0x12138e ==="
+          "$OBJDUMP" -d \
+            --start-address=0x121340 \
+            --stop-address=0x1213d0 \
+            sysroot/system/bin/linker || true
+          echo "=== raw bytes around vaddr 0x12138e ==="
+          "$OBJDUMP" -s \
+            --start-address=0x121370 \
+            --stop-address=0x1213a0 \
+            sysroot/system/bin/linker || true
+
       - name: Build ARM64 translation runtime
         shell: bash
         run: |
