@@ -129,9 +129,16 @@ final class GuestRuntime {
         return n != null && n > 0;
     }
 
-    /** Rewrites an intent that names a plugin activity to the matching stub; others pass through. */
+    /** Rewrites package-scoped settings intents and plugin activity intents. */
     Intent route(Intent intent) {
-        if (intent == null || intent.getComponent() == null) return intent;
+        if (intent == null) return null;
+
+        LoadedPlugin cur = current;
+        if (cur != null) {
+            intent = PermissionCompat.routeSettingsIntent(intent, cur.packageName, host.getPackageName());
+        }
+
+        if (intent.getComponent() == null) return intent;
         if (host.getPackageName().equals(intent.getComponent().getPackageName())
                 && intent.getComponent().getClassName().startsWith(Stubs.class.getName())) {
             return intent;  // already a stub intent
