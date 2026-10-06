@@ -44,14 +44,18 @@ final class GuestInstrumentation extends Instrumentation {
     @Override
     public void callActivityOnCreate(Activity activity, Bundle icicle) {
         runtime.prepareActivity(activity, icicle);
+        Diagnostics.trace(activity, "activity-onCreate-enter " + activity.getClass().getName());
         base.callActivityOnCreate(activity, icicle);
+        Diagnostics.trace(activity, "activity-onCreate-return " + activity.getClass().getName());
         GuestWindowStyle.afterCreate(activity);
     }
 
     @Override
     public void callActivityOnCreate(Activity activity, Bundle icicle, PersistableBundle persistentState) {
         runtime.prepareActivity(activity, icicle);
+        Diagnostics.trace(activity, "activity-onCreate-enter(persist) " + activity.getClass().getName());
         base.callActivityOnCreate(activity, icicle, persistentState);
+        Diagnostics.trace(activity, "activity-onCreate-return(persist) " + activity.getClass().getName());
         GuestWindowStyle.afterCreate(activity);
     }
 
