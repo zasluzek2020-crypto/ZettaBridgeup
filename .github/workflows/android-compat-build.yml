@@ -59,23 +59,41 @@ jobs:
       - name: Diagnose guest linker instruction window
         shell: bash
         run: |
+          mkdir -p build/diagnostics
           OBJDUMP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
           READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
-          echo "=== guest linker ELF identity ==="
-          file sysroot/system/bin/linker
-          "$READELF" -h sysroot/system/bin/linker
-          echo "=== guest linker section map ==="
-          "$OBJDUMP" -h sysroot/system/bin/linker
-          echo "=== disassembly around vaddr 0x12138e ==="
-          "$OBJDUMP" -d \
-            --start-address=0x121340 \
-            --stop-address=0x1213d0 \
-            sysroot/system/bin/linker || true
-          echo "=== raw bytes around vaddr 0x12138e ==="
-          "$OBJDUMP" -s \
-            --start-address=0x121370 \
-            --stop-address=0x1213a0 \
-            sysroot/system/bin/linker || true
+          {
+            echo "=== guest linker ELF identity ==="
+            file sysroot/system/bin/linker
+            "$READELF" -h sysroot/system/bin/linker
+            echo
+            echo "=== guest linker sections ==="
+            "$READELF" -SW sysroot/system/bin/linker
+            echo
+            echo "=== guest linker program headers ==="
+            "$READELF" -lW sysroot/system/bin/linker
+            echo
+            echo "=== disassembly around vaddr 0x12138e ==="
+            "$OBJDUMP" -d \
+              --start-address=0x121340 \
+              --stop-address=0x1213d0 \
+              sysroot/system/bin/linker || true
+            echo
+            echo "=== raw bytes around vaddr 0x12138e ==="
+            "$OBJDUMP" -s \
+              --start-address=0x121340 \
+              --stop-address=0x1213d0 \
+              sysroot/system/bin/linker || true
+          } > build/diagnostics/linker-12138e.txt
+          cat build/diagnostics/linker-12138e.txt
+
+      - name: Upload linker diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: linker-diagnostics
+          path: build/diagnostics/linker-12138e.txt
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Build ARM64 translation runtime
         shell: bash
